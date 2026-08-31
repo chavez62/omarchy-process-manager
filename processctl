@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+import json
+import os
+import signal
+import sys
+import tempfile
+from pathlib import Path
+
+
+UID = os.getuid()
+PROTECTED_NAMES = {"omarchy-shell", "quickshell"}
+RUNTIME_DIR = Path(os.environ.get("OMARCHY_PROCESS_MANAGER_STATE_DIR", os.environ.get("XDG_RUNTIME_DIR", tempfile.gettempdir())))
+STATE_FILE = RUNTIME_DIR / f"omarchy-process-manager-{UID}.json"
+
+
+def read_text(path):
+    try:
+        return Path(path).read_text(errors="replace").strip()
+    except (OSError, PermissionError):
+        return ""
+
+
+def owned(pid):
+    try:
+        return Path(f"/proc/{pid}").stat().st_uid == UID
+    except (OSError, ValueError):
+        return False
+
+
+def identity(pid):
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text().split()
+        return stat[21], stat[1].strip("()")
+    except (OSError, IndexError):
+        return None, ""
+
+
+def protected(pid):
+    if pid in (0, 1, os.getpid(), os.getppid()):
+        return True
+    return read_text(f"/proc/{pid}/comm") in PROTECTED_NAMES
+
+
+def load_state():
+    try:
+        return json.loads(STATE_FILE.read_text())
+    except (OSError, ValueError):
+        return {"total": 0, "processes": {}}
+
+
+def save_state(state):
+    temporary = STATE_FILE.with_suffix(".tmp")
+    temporary.write_text(json.dumps(state))
+    os.chmod(temporary, 0o600)
+    temporary.replace(STATE_FILE)
+
+
+def snapshot():
+    ticks = os.sysconf(os.sysconf_names["SC_CLK_TCK"])
+    cpu_count = os.cpu_count() or 1
+    cpu_line = read_text("/proc/stat").splitlines()[0].split()[1:]
+    total_ticks = sum(int(value) for value in cpu_line)
+    previous = load_state()
+    previous_total = int(previous.get("total", 0))
+    previous_processes = previous.get("processes", {})
+    next_processes = {}
+    mem_total = 1
+    for line in read_text("/proc/meminfo").splitlines():
+        if line.startswith("MemTotal:"):
+            mem_total = max(1, int(line.split()[1]) * 1024)
+            break
+
+    rows = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        pid = int(entry.name)
+        if not owned(pid) or protected(pid):
+            continue
+        try:
+            stat = (entry / "stat").read_text().split()
+            command = (entry / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace").strip()
+            name = stat[1].strip("()")
+            state = stat[2]
+            nice = int(stat[18])
+            process_ticks = int(stat[13]) + int(stat[14])
+            start_time = stat[21]
+            key = f"{pid}:{start_time}"
+            prior_ticks = int(previous_processes.get(key, process_ticks))
+            total_delta = max(1, total_ticks - previous_total)
+            cpu = max(0, (process_ticks - prior_ticks) / total_delta * cpu_count * 100)
+            next_processes[key] = process_ticks
+            rss = int(stat[23]) * os.sysconf("SC_PAGE_SIZE")
+            rows.append({
+                "pid": pid,
+                "name": name,
+                "command": command or name,
+                "state": state,
+                "stopped": state in ("T", "t"),
+                "nice": nice,
+                "startTime": start_time,
+                "cpu": round(cpu, 1),
+                "memory": round(100 * rss / mem_total, 1),
+                "rssMiB": round(rss / 1048576, 1),
+            })
+        except (OSError, ValueError, IndexError):
+            continue
+    save_state({"total": total_ticks, "processes": next_processes})
+    rows.sort(key=lambda row: (row["cpu"], row["memory"]), reverse=True)
+    print(json.dumps({"ok": True, "processes": rows[:200]}))
+
+
+def act(kind, pid_text, expected_start, value=None):
+    try:
+        pid = int(pid_text)
+    except ValueError:
+        raise SystemExit("invalid pid")
+    if not owned(pid):
+        raise SystemExit("process is not owned by the current user")
+    if protected(pid):
+        raise SystemExit("process is protected")
+    actual_start, _ = identity(pid)
+    if not expected_start or actual_start != expected_start:
+        raise SystemExit("process identity changed; refresh and try again")
+
+    signals = {
+        "terminate": signal.SIGTERM,
+        "kill": signal.SIGKILL,
+        "pause": signal.SIGSTOP,
+        "resume": signal.SIGCONT,
+    }
+    try:
+        if kind == "renice":
+            nice = int(value)
+            current = os.getpriority(os.PRIO_PROCESS, pid)
+            if nice < current or nice > 19:
+                raise ValueError
+            os.setpriority(os.PRIO_PROCESS, pid, nice)
+            message = f"Set PID {pid} nice value to {nice}"
+        elif kind in signals:
+            os.kill(pid, signals[kind])
+            message = f"Sent {kind} to PID {pid}"
+        else:
+            raise SystemExit("unsupported action")
+        print(json.dumps({"ok": True, "message": message}))
+    except (OSError, ValueError) as error:
+        print(json.dumps({"ok": False, "message": str(error)}))
+        raise SystemExit(1)
+
+
+if len(sys.argv) == 1 or sys.argv[1] == "list":
+    snapshot()
+elif len(sys.argv) >= 4:
+    act(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4] if len(sys.argv) > 4 else None)
+else:
+    raise SystemExit("usage: processctl [list|ACTION PID START_TIME [VALUE]]")

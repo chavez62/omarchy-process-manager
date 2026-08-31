@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.chavez62.process-manager",
+  "name": "Process Manager",
+  "version": "1.0.0",
+  "author": "Louis Chavez",
+  "license": "MIT",
+  "description": "Native process monitor with pause, resume, renice, terminate, and kill controls",
+  "kinds": ["service", "bar-widget"],
+  "entryPoints": {
+    "service": "ProcessService.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Process Manager",
+    "description": "Inspect and control your processes from the bar",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  },
+  "repository": "https://github.com/chavez62/omarchy-process-manager"
+}
