@@ -15,7 +15,7 @@ A native, theme-aware process manager for the Omarchy Quattro bar. Inspect live 
 - Protection for the Omarchy/Quickshell host process
 - Polling only while the panel is open
 
-Only processes owned by the current user are shown or controlled. The plugin never uses `sudo`, `pkexec`, network access, telemetry, or external services.
+Only processes owned by the current user are shown or controlled. The plugin never crosses a privilege boundary and has no network access, telemetry, or external services.
 
 ## Requirements
 
