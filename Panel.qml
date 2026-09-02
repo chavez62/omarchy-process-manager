@@ -182,6 +182,7 @@ Panel {
         Text {
           width: parent.width
           text: root.selectedProcess ? root.selectedProcess.command : "Select a process to manage it"
+          textFormat: Text.PlainText
           elide: Text.ElideMiddle
           color: root.selectedProcess ? root.foreground : root.dim
           font.family: root.fontFamily
@@ -206,6 +207,7 @@ Panel {
           width: parent.width
           visible: processService && processService.message !== ""
           text: processService ? processService.message : ""
+          textFormat: Text.PlainText
           color: processService && processService.lastActionOk ? root.dim : root.urgent
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
